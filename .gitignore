@@ -1,0 +1,16 @@
+# ── Compiled Tailwind CSS (build artifact, not source) ─────
+irid/assets/css/app.css
+
+# ── Docker ──────────────────────────────────────────────────
+pgdata/
+
+# ── R ───────────────────────────────────────────────────────
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+renv/
+
+# ── Secrets ─────────────────────────────────────────────────
+.env

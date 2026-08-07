@@ -1,0 +1,10 @@
+default:
+  app:
+    name: "Mtcars Plot Explorer"
+    port: 3839
+  db:
+    host: !expr Sys.getenv("PGHOST", "localhost")
+    port: !expr Sys.getenv("PGPORT", "5432")
+    user: !expr Sys.getenv("PGUSER", "postgres")
+    password: !expr Sys.getenv("PGPASSWORD", "postgres")
+    dbname: !expr Sys.getenv("PGDATABASE", "irid_example")

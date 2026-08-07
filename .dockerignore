@@ -1,0 +1,4 @@
+# Keep the local renv library out of the Docker build context.
+# The image gets its library from the renv stage, built for the
+# container's R version and platform.
+irid/renv/library

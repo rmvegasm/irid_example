@@ -1,0 +1,9 @@
+name: irid-example
+
+include:
+  - path: db/compose.yml
+    env_file: .env
+  - path: irid/compose.yml
+    env_file: .env
+  - path: caddy/compose.yml
+    env_file: .env

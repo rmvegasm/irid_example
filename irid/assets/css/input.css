@@ -1,0 +1,34 @@
+/* ────────────────────────────────────────────────────────────────
+ * input.css — Tailwind CSS v4 entry point
+ *
+ * This is the SOURCE file. The compiled output (app.css) is a
+ * build artifact — never check it into version control.
+ *
+ * The @source paths are relative to the location of this CSS file.
+ * From irid/assets/css/:
+ *   ../../r/     → R box modules directory
+ *   ../          → irid Shiny app sources
+ *
+ * ── How CSS is served ──────────────────────────────────────────
+ *
+ * app.r calls shiny::addResourcePath("css", "assets/css")
+ * so Shiny serves /css/app.css directly from this directory — no
+ * copying to a www/ folder. Same layout on host and in container.
+ *
+ * ── Compilation ────────────────────────────────────────────────
+ *
+ * Docker (automatic): compiled during image build via the CSS
+ *   stage in irid/Dockerfile. Output stays in this directory.
+ *
+ * Local dev without Docker:
+ *   bash irid/assets/css/build.sh
+ *
+ * The output lands here (irid/assets/css/app.css), which is
+ * exactly where Shiny expects it via addResourcePath.
+ * ──────────────────────────────────────────────────────────────── */
+
+@import "tailwindcss";
+
+/* Scan R source files for Tailwind utility class names */
+@source "../../r/";
+@source "../";

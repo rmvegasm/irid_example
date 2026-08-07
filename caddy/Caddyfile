@@ -1,0 +1,8 @@
+# Caddyfile — Reverse proxy for the irid-example project
+
+:80 {
+    reverse_proxy irid:3839 {
+        lb_policy cookie
+        fail_duration 30s
+    }
+}
