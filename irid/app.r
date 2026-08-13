@@ -1,24 +1,24 @@
 #!/usr/bin/env Rscript
 # ─────────────────────────────────────────────────────────────────────
-# app.r — irid Shiny app: mtcars ggplot2 explorer
+# app.r — irid Shiny app: MapLibre administrative-unit explorer
 #
 # This file is intentionally minimal. It:
-#   1. Creates a reactiveStore for all app state
-#   2. Defines the mtcars dataset
-#   3. Wires handlers and components together
-#   4. Launches via iridApp()
+#   1. Creates the authentication reactiveStore
+#   2. Creates a separate `geo` reactiveStore for admin-picker state
+#   3. Loads the bundled geo metadata (r/geo)
+#   4. Wires handlers and components together
+#   5. Launches via iridApp()
 #
 # All UI components live in r/components/ submodules.
 # Server-side handlers live in r/server/.
-# Reusable logic lives at the r/ top level (r/plot/).
+# Geo data loading lives in r/geo/.
 # All styles are contained within the imported components.
 #
 # Box module layout (box path defaults to app working dir):
 #   box::use(r/server)                 — login/logout handlers
-#   box::use(r/plot)                   — ggplot2 plot builder
+#   box::use(r/geo)                    — administrative metadata loader
 #   box::use(r/components/layouts)     — app shell layout
 #   box::use(r/components/pages)       — full page components
-#   box::use(r/db)                     — database (re-exported via handlers)
 #
 # Tailwind CSS: compiled via @tailwindcss/cli, served at /css/app.css.
 # ─────────────────────────────────────────────────────────────────────
@@ -27,41 +27,31 @@ box::use(
   irid[iridApp, When, reactiveStore, IridWidget],
   shiny[addResourcePath, tags],
   htmltools[htmlDependency],
-  ggplot2[...],
 )
 
 box::use(
   r/server[handle_login, handle_logout],
-  r/plot[build_plot],
+  r/geo[load_geo],
   r/components/layouts[app_shell],
-  r/components/pages[login_page, mtcars_explorer],
+  r/components/pages[login_page, admin_picker_page],
 )
 
 # ── Static assets ───────────────────────────────────────────────
-# Serve CSS and JS from irid/assets/ — same layout as the host
+# Serve CSS, JS, and GeoJSON from irid/assets/ — same layout as the host
 # project tree. Shiny's default www/ directory is not used.
 #
 # In Docker:     /app/irid/assets/   (copied at build time)
 # Local dev:     ./assets/           (relative to irid/)
 addResourcePath("css", "assets/css")
 addResourcePath("js", "assets/js")
-
-# ── Default colour palette — viridis for discrete & continuous ──
-# Applied globally so every plot inherits perceptually-uniform,
-# colourblind-friendly scales without per-plot boilerplate.
-options(
-  ggplot2.discrete.colour   = function(...) scale_colour_viridis_d(...),
-  ggplot2.discrete.fill     = function(...) scale_fill_viridis_d(...),
-  ggplot2.continuous.colour = function(...) scale_colour_viridis_c(...),
-  ggplot2.continuous.fill   = function(...) scale_fill_viridis_c(...)
-)
+addResourcePath("geo", "assets/geo")
 
 # ── App configuration (reads env vars via config.yml) ───────────
 cfg <- config::get()
 
 # ── App definition (factory function — called once per session) ─
-MtcarsApp <- function() {
-  # ── Single reactiveStore for all app state ────────────────────
+AdminPickerApp <- function() {
+  # ── Authentication store ────────────────────────────────────────
   state <- reactiveStore(list(
     auth = list(
       logged_in = FALSE,
@@ -73,28 +63,27 @@ MtcarsApp <- function() {
       username = "",
       password = ""
     ),
-    plot = list(
-      x_var = "mpg",
-      y_var = "hp",
-      color_var = "cyl"
-    ),
     dark_mode = FALSE
   ))
 
-  # ── Dataset ───────────────────────────────────────────────────
-  data <- mtcars
-  data$model <- rownames(data)
+  # ── Admin-picker store (separate from auth) ────────────────────
+  geo <- reactiveStore(list(
+    active_level = "country",
+    selection = list(
+      country = character(),
+      state   = character(),
+      county  = character()
+    )
+  ))
+
+  # ── Static geo metadata (shared across sessions via r/geo cache)
+  data <- load_geo()
 
   # ── Handlers (factories that close over the store) ────────────
   on_login  <- handle_login(state)
   on_logout <- handle_logout(state)
 
-  # ── Plot function (factory that returns a 0-arg ggplot builder)
-  plot_fn <- build_plot(state, data, state$dark_mode)
-
   # ── Dark-mode dependency (JS widget source) ───────────────────
-  # The src `c(href = "js")` is served via addResourcePath("js", "assets/js")
-  # above, so the browser loads /js/dark-mode.js.
   dark_mode_dep <- htmlDependency(
     name    = "dark-mode",
     version = "1.0.0",
@@ -104,7 +93,8 @@ MtcarsApp <- function() {
 
   # ── Assemble ──────────────────────────────────────────────────
   app_shell(
-    title = "Mtcars Explorer",
+    title = "Administrative Explorer",
+    fluid = TRUE,
     user = \() {
       if (state$auth$logged_in()) list(username = state$auth$user_name())
       else NULL
@@ -112,9 +102,7 @@ MtcarsApp <- function() {
     on_logout = on_logout,
 
     # Hidden widget: bridges prefers-color-scheme into the reactive
-    # store via irid's native wire protocol.  The JS factory calls
-    # sendEvent("scheme-change", {dark}) on every OS theme change,
-    # and the handler below pushes it into state$dark_mode.
+    # store via irid's native wire protocol.
     IridWidget(
       name = "dark-mode-detector",
       events = list(
@@ -126,19 +114,19 @@ MtcarsApp <- function() {
 
     When(
       \() state$auth$logged_in(),
-      \() mtcars_explorer(
-        store = state,
-        data = data,
-        plot_fn = plot_fn
+      \() admin_picker_page(
+        geo       = geo,
+        data      = data,
+        dark_mode = state$dark_mode
       ),
       otherwise = \() login_page(
         store = state,
         on_login = on_login,
-        title = "Mtcars Explorer"
+        title = "Administrative Explorer"
       )
     )
   )
 }
 
 # ── Launch ──────────────────────────────────────────────────────
-iridApp(MtcarsApp)
+iridApp(AdminPickerApp)

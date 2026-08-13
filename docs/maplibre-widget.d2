@@ -1,0 +1,17 @@
+direction: right
+
+rstore: R reactive store
+rwrapper: MaplibreAdmin()
+wire: irid wire
+factory: maplibre-admin.js
+map: MapLibre GL
+assets: /geo/*.geojson
+
+rstore -> rwrapper: props
+rwrapper -> wire: props
+wire -> factory: update
+factory -> map: style
+map -> factory: click
+factory -> wire: event
+wire -> rstore: handler
+assets -> factory: fetch

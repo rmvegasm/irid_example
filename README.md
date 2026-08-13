@@ -3,6 +3,16 @@
 A minimal Docker Compose project running an irid Shiny app with
 PostgreSQL-backed authentication behind a Caddy reverse proxy.
 
+The app itself is a **MapLibre GL administrative-unit explorer**: after
+signing in you can pick countries, states/provinces, and counties from
+three linked multi-select pickers while a live map shows the selected
+polygons (clicking them removes/toggles selection). It showcases a
+custom `IridWidget` wrapping MapLibre GL, a dedicated `reactiveStore`
+for the picker state, and three instances of one reusable picker
+component. See [Code organization & component
+modules](docs/architecture.md) and [Custom widgets: the MapLibre GL admin
+map](docs/maplibre-widget.md) for the walkthrough.
+
 ## Architecture
 
 ```
@@ -20,14 +30,24 @@ Browser ──▶ Caddy:80 ──▶ irid:3839 ──▶ PostgreSQL
 │   ├── Dockerfile               #   Multi-stage: CSS build + R runtime
 │   ├── app.r                    #   App entry point
 │   ├── config.yml               #   App configuration
-│   ├── r/                       #   R box modules (logic/ + view/)
-│   └── assets/css/              #   Tailwind CSS (input.css + compiled app.css)
+│   ├── r/                       #   R box modules (geo/, server/, components/)
+│   └── assets/                  #   css/, js/ (MapLibre widget), geo/ (GeoJSON)
+├── data-raw/generate_geo.R      # Regenerates the bundled geo assets
 ├── caddy/compose.yml            # Reverse proxy
 │   └── Caddyfile
 │
 ├── pginit/                      # DB init scripts (users table + demo seed)
 └── pgdata/                      # PostgreSQL data volume
 ```
+
+### Administrative-boundary data
+
+The admin polygons ship as static GeoJSON under `irid/assets/geo/` and
+are served at `/geo/*.geojson`; the MapLibre widget fetches them
+browser-side, while R only loads the lightweight `*_meta.json` tables
+for the pickers. Re-run `Rscript data-raw/generate_geo.R` to regenerate
+(the script uses `rnaturalearth` for admin 0/1 and geoBoundaries for
+admin 2 — the heavy geospatial stack is dev-only, not an app dependency).
 
 ## Getting Started
 

@@ -29,9 +29,37 @@ box::use(
 #'   appear in the navbar via a `When` control flow node.
 #' @param on_logout A 0-arg function called when the navbar logout button
 #'   is clicked. If NULL, the button calls the internal placeholder.
+#' @param fluid When `TRUE`, the shell renders full-bleed: the body wrapper
+#'   becomes a fixed-height flex column, the main area is a flex-1 region
+#'   with no padding/max-width, and the page fills it (used by the map
+#'   explorer).
 #' @return A shiny tag tree.
 #' @export
-app_shell <- function(..., title = "App", user = NULL, on_logout = NULL) {
+app_shell <- function(..., title = "App", user = NULL, on_logout = NULL,
+                       fluid = FALSE) {
+  body_class <- if (fluid) {
+    paste(
+      "h-screen flex flex-col overflow-hidden",
+      "bg-gray-50 dark:bg-neutral-900 text-gray-900 dark:text-neutral-100",
+      "font-sans antialiased"
+    )
+  } else {
+    paste(
+      "min-h-screen bg-gray-50 dark:bg-neutral-900",
+      "text-gray-900 dark:text-neutral-100 font-sans antialiased"
+    )
+  }
+  main_class <- if (fluid) {
+    "flex-1 min-h-0 flex flex-col"
+  } else {
+    "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
+  }
+  nav_inner_class <- if (fluid) {
+    "px-4 sm:px-6 lg:px-8"
+  } else {
+    "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"
+  }
+
   tagList(
     # Head elements — Shiny merges these into the document `<head>`
     tags$head(
@@ -48,13 +76,13 @@ app_shell <- function(..., title = "App", user = NULL, on_logout = NULL) {
     # Body-level wrapper — provides the styling that was on `<body>`.
     # `min-h-screen` on this div inherits from the real `<body>` via CSS.
     tags$div(
-      class = "min-h-screen bg-gray-50 dark:bg-neutral-900 text-gray-900 dark:text-neutral-100 font-sans antialiased",
+      class = body_class,
 
       # Navbar
       tags$nav(
         class = "bg-white dark:bg-neutral-800 border-b border-gray-200 dark:border-neutral-700 shadow-sm",
         tags$div(
-          class = "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+          class = nav_inner_class,
           tags$div(
             class = "flex justify-between h-14 items-center",
             tags$span(class = "text-lg font-semibold text-gray-800 dark:text-neutral-100", title),
@@ -83,7 +111,7 @@ app_shell <- function(..., title = "App", user = NULL, on_logout = NULL) {
 
       # Main content
       tags$main(
-        class = "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8",
+        class = main_class,
         ...
       )
     )
