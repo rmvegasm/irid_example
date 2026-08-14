@@ -31,7 +31,7 @@ iridApp(Counter)
 ```
 
 When a reactive value changes, irid updates only the DOM nodes bound to it
---- it does not re-render the component or call an `update*Input` helper.
+---it does not re-render the component or call an `update*Input` helper.
 State and markup live together in the same function.
 
 The app entry point (`irid/app.r`) is a factory that builds this component
@@ -58,7 +58,7 @@ irid_example/
     ├── assets/
     │   ├── css/                 # Tailwind source + build script
     │   ├── js/                  # widget factories (dark-mode, maplibre)
-    │   └── geo/                 # GeoJSON + *_meta.json (served at /geo/)
+    │   └── geo/                 # countries.geojson + per-country states/counties + *_meta.json
     └── r/
         ├── components/
         │   ├── elements/        # atoms (alert, badge, buttons, inputs)
@@ -172,10 +172,16 @@ Administrative polygons ship as static files, not as `sf` objects in R:
 
 - `data-raw/generate_geo.R` produces
   `irid/assets/geo/{countries,states,counties}.geojson` plus a compact
-  `*_meta.json` per level (id, name, admin_level, parent linkage).
+  `*_meta.json` per level (id, name, admin_level, parent linkage). It also
+  splits states and counties into per-country files under
+  `irid/assets/geo/{states,counties}/{country_id}.geojson`.
+- Parent linkage: states carry `country_id`; counties also carry only
+  `country_id` (no `state_id`), so county selection can only be cascaded
+  by country, not by individual state.
 - `r/geo` reads only the `*_meta.json` files into data.frames at startup.
-- The map widget fetches the `.geojson` files browser-side; geometry never
-  travels through the Shiny/irid wire channel.
+- The map widget fetches `countries.geojson` up front (it is small) and
+  lazy-loads the per-country states/counties files as countries are
+  selected; geometry never travels through the Shiny/irid wire channel.
 
 This keeps the heavy geospatial stack (`rnaturalearth`, geoBoundaries)
 confined to the dev-time generator, not the app runtime. Re-run the script

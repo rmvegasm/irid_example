@@ -5,7 +5,7 @@ rwrapper: MaplibreAdmin()
 wire: irid wire
 factory: maplibre-admin.js
 map: MapLibre GL
-assets: /geo/*.geojson
+assets: "/geo/* (lazy per-country)"
 
 rstore -> rwrapper: props
 rwrapper -> wire: props

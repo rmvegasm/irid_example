@@ -20,6 +20,20 @@
  *   feature-click: { id, adminLevel } — a feature of the active level was
  *   clicked. R decides what it means (remove for countries, toggle for
  *   states/counties) so the widget stays behaviour-agnostic.
+ *
+ * Polygon loading strategy (performance):
+ *   - countries.geojson is small, so it is fetched up front and the map
+ *     is built as soon as it (and maplibregl) arrive. The heavy
+ *     states/counties payloads are NEVER fetched eagerly.
+ *   - states and counties are split into per-country files on the server
+ *     (`/geo/states/{id}.geojson`, `/geo/counties/{id}.geojson`) and are
+ *     lazy-loaded as the user selects countries.
+ *   - Fetched features are cached by country id and stay in their source
+ *     even when the country is deselected, so re-selecting never
+ *     re-downloads. Filters hide them instead of removing them.
+ *   - Selecting a country pre-fetches its states (the next admin level
+ *     down); selecting a state pre-fetches its country's counties. That
+ *     way switching picker focus to the next level is instant.
  * ───────────────────────────────────────────────────────────────────── */
 
 (function () {
@@ -66,12 +80,20 @@
     });
   }
 
+  function isNotFound(err) {
+    return /HTTP 404/.test(String((err && err.message) || err));
+  }
+
   // irid serializes a length-1 character vector as a JSON *scalar* (Shiny's
   // `auto_unbox`), while 0 -> `[]` and 2+ -> `[...]`. Normalize so selection
   // props are ALWAYS arrays before they feed maplibre `literal` filters.
   function toArray(v) {
     if (v == null) return [];
     return Array.isArray(v) ? v : [v];
+  }
+
+  function emptyFC() {
+    return { type: "FeatureCollection", features: [] };
   }
 
   // The app's dark mode mirrors the OS `prefers-color-scheme` media query,
@@ -243,6 +265,116 @@
     var hovered = null; // { source, id }
     var userInteracting = false;
 
+    // ── lazy per-country polygon loading ────────────────────────
+    // States and counties are served one file per parent country. The cache
+    // maps country id → Feature[]; `loaded` records that a fetch (or a 404)
+    // completed so we never re-request the same country; `inFlight` dedupes
+    // concurrent requests for the same country.
+    var statesCache = {};
+    var countiesCache = {};
+    var statesLoaded = {};
+    var countiesLoaded = {};
+    var statesInFlight = {};
+    var countiesInFlight = {};
+
+    // Debug hook for console inspection alongside `window.__adminMap`.
+    window.__adminCaches = {
+      states: statesCache,
+      counties: countiesCache,
+      statesLoaded: statesLoaded,
+      countiesLoaded: countiesLoaded
+    };
+
+    function cacheFor(levelName) {
+      return levelName === "states" ? statesCache : countiesCache;
+    }
+
+    function loadedFor(levelName) {
+      return levelName === "states" ? statesLoaded : countiesLoaded;
+    }
+
+    function inFlightFor(levelName) {
+      return levelName === "states" ? statesInFlight : countiesInFlight;
+    }
+
+    // Rebuild a FeatureCollection from the per-country cache and push it into
+    // the maplibre source. Cheap enough to do after each batch of fetches.
+    // NOTE: do not gate on map.loaded() here — it is transiently false right
+    // after setFilter/setPaintProperty mark the style dirty, which would make
+    // us silently drop freshly fetched features. Checking that the source
+    // exists is enough: the load handler calls refreshSource() again once the
+    // map is ready, so data fetched before load is still pushed.
+    function refreshSource(levelName) {
+      if (destroyed || !map) return;
+      var cache = cacheFor(levelName);
+      var features = [];
+      Object.keys(cache).forEach(function (cid) {
+        features = features.concat(cache[cid]);
+      });
+      var src = map.getSource(levelName);
+      if (src && src.setData) {
+        src.setData({ type: "FeatureCollection", features: features });
+        // setData replaces the source data, so make sure the layer filters
+        // still reflect the current selection (they are usually already set,
+        // but re-applying is idempotent and covers a skipped update()).
+        applyFilters();
+      }
+    }
+
+    // Fetch (if not already fetched) the per-country files for `countryIds`
+    // and merge their features into the level's source. Returns a promise
+    // that resolves once the source has been refreshed.
+    function ensureLevel(levelName, countryIds) {
+      var cache = cacheFor(levelName);
+      var loaded = loadedFor(levelName);
+      var inFlight = inFlightFor(levelName);
+
+      var toFetch = [];
+      (countryIds || []).forEach(function (cid) {
+        if (cid && !loaded[cid] && !inFlight[cid]) toFetch.push(cid);
+      });
+      if (!toFetch.length) return Promise.resolve();
+
+      var fetches = toFetch.map(function (cid) {
+        var url = "/geo/" + levelName + "/" + encodeURIComponent(cid) + ".geojson";
+        var p = fetchJSON(url).then(function (fc) {
+          cache[cid] = (fc && fc.features) ? fc.features : [];
+          loaded[cid] = true;
+          delete inFlight[cid];
+        }).catch(function (err) {
+          // A 404 just means this country has no polygons at that level;
+          // remember it so we don't keep requesting it.
+          if (isNotFound(err)) {
+            cache[cid] = [];
+            loaded[cid] = true;
+          }
+          delete inFlight[cid];
+        });
+        inFlight[cid] = p;
+        return p;
+      });
+
+      return Promise.all(fetches).then(function () {
+        refreshSource(levelName);
+      });
+    }
+
+    // Load whatever the currently active level needs, plus pre-fetch the next
+    // level down so focus changes are instant.
+    function prefetch() {
+      var sc = state.selectedCountries || [];
+      if (!sc.length) return;
+      var level = state.activeLevel || "country";
+      if (level === "country") {
+        ensureLevel("states", sc);
+      } else if (level === "state") {
+        ensureLevel("states", sc);
+        ensureLevel("counties", sc);
+      } else {
+        ensureLevel("counties", sc);
+      }
+    }
+
     function levelNumber(name) {
       return LEVELS[name] != null ? LEVELS[name] : 0;
     }
@@ -351,7 +483,7 @@
     }
 
     // ── map construction (background async load, sync handle) ──
-    function initMap(maplibregl, countriesFC, statesFC, countiesFC) {
+    function initMap(maplibregl, countriesFC) {
       if (destroyed) return;
       countriesData = countriesFC;
 
@@ -371,16 +503,23 @@
       map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
 
       map.on("load", function () {
+        // Countries arrive eagerly (they're small); states/counties start
+        // empty and are filled lazily by ensureLevel()/refreshSource().
         map.addSource("countries", { type: "geojson", data: countriesFC, promoteId: "id" });
-        map.addSource("states", { type: "geojson", data: statesFC, promoteId: "id" });
-        map.addSource("counties", { type: "geojson", data: countiesFC, promoteId: "id" });
+        map.addSource("states", { type: "geojson", data: emptyFC(), promoteId: "id" });
+        map.addSource("counties", { type: "geojson", data: emptyFC(), promoteId: "id" });
 
         makeLayers().forEach(function (layer) { map.addLayer(layer); });
+
+        // Push any state/county data fetched before the map finished loading.
+        refreshSource("states");
+        refreshSource("counties");
 
         applyFilters();
         applyVisibility();
         applyBasemap();
         if (state.selectedCountries.length > 0) fitToSelectedCountries();
+        prefetch();
       });
 
       map.on("click", function (e) {
@@ -415,13 +554,13 @@
       map.on("dragend", function () { userInteracting = false; });
     }
 
+    // Only wait for the map library + the small countries file. The heavy
+    // states/counties payloads load on demand as countries are selected.
     Promise.all([
       waitFor(function () { return window.maplibregl; }, 50, 30000),
-      fetchJSON("/geo/countries.geojson"),
-      fetchJSON("/geo/states.geojson"),
-      fetchJSON("/geo/counties.geojson")
+      fetchJSON("/geo/countries.geojson")
     ]).then(function (parts) {
-      initMap(parts[0], parts[1], parts[2], parts[3]);
+      initMap(parts[0], parts[1]);
     }).catch(function (e) {
       console.error("maplibre-admin: init failed", e);
     });
@@ -431,6 +570,9 @@
         window.__adminUpdateCount = (window.__adminUpdateCount || 0) + 1;
 
         var countryChanged = false;
+        var stateChanged = false;
+        var levelChanged = false;
+
         if ("selectedCountries" in values) {
           var next = toArray(values.selectedCountries);
           var nextKey = next.slice().sort().join("|");
@@ -440,10 +582,31 @@
           }
           state.selectedCountries = next;
         }
-        if ("selectedStates" in values) state.selectedStates = toArray(values.selectedStates);
+        if ("selectedStates" in values) {
+          state.selectedStates = toArray(values.selectedStates);
+          stateChanged = true;
+        }
         if ("selectedCounties" in values) state.selectedCounties = toArray(values.selectedCounties);
-        if ("activeLevel" in values) state.activeLevel = values.activeLevel;
+        if ("activeLevel" in values) {
+          state.activeLevel = values.activeLevel;
+          levelChanged = true;
+        }
         if ("darkMode" in values) state.darkMode = !!values.darkMode;
+
+        // ── lazy loading / pre-fetching ─────────────────────────
+        // A new country selection pre-fetches its states (next level down);
+        // a new state selection pre-fetches its country's counties. Switching
+        // focus also triggers a safety-net load of the newly active level.
+        if (countryChanged && state.selectedCountries.length) {
+          ensureLevel("states", state.selectedCountries);
+        }
+        if (stateChanged && state.selectedStates.length) {
+          ensureLevel("counties", state.selectedCountries);
+        }
+        if (levelChanged) {
+          if (state.activeLevel === "state") ensureLevel("states", state.selectedCountries);
+          if (state.activeLevel === "county") ensureLevel("counties", state.selectedCountries);
+        }
 
         if (!map || !map.loaded()) return; // map applies latest state on load
 

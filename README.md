@@ -43,11 +43,13 @@ Browser ──▶ Caddy:80 ──▶ irid:3839 ──▶ PostgreSQL
 ### Administrative-boundary data
 
 The admin polygons ship as static GeoJSON under `irid/assets/geo/` and
-are served at `/geo/*.geojson`; the MapLibre widget fetches them
-browser-side, while R only loads the lightweight `*_meta.json` tables
-for the pickers. Re-run `Rscript data-raw/generate_geo.R` to regenerate
-(the script uses `rnaturalearth` for admin 0/1 and geoBoundaries for
-admin 2 — the heavy geospatial stack is dev-only, not an app dependency).
+are served at `/geo/*.geojson`. Countries are one small file fetched up
+front; states and counties are split per country (`/geo/states/{id}.geojson`,
+`/geo/counties/{id}.geojson`) so the MapLibre widget lazy-loads only the
+polygons for the countries the user selects. R only loads the lightweight
+`*_meta.json` tables for the pickers. Re-run `Rscript data-raw/generate_geo.R`
+to regenerate (the script uses `rnaturalearth` for admin 0/1 and geoBoundaries
+for admin 2 — the heavy geospatial stack is dev-only, not an app dependency).
 
 ## Getting Started
 

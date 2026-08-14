@@ -4,7 +4,8 @@
 #' three instances of the same `admin_picker` component (countries, states,
 #' counties); the right two-thirds hosts the MapLibre map. Selection state
 #' lives in a dedicated `reactiveStore` (`geo`), kept separate from the
-#' authentication store.
+#' authentication store. Removing a unit also removes its selected children
+#' in lower admin levels.
 #'
 #' @md
 #' @name admin_picker_page
@@ -70,10 +71,39 @@ admin_picker_page <- function(geo, data, dark_mode) {
   county_names  <- lookup_names(data$counties)
 
   # ── selection mutation helpers ──────────────────────────────────
+  # Removing a unit also removes any selected children in lower admin
+  # levels, so a deselected parent never leaves orphaned selections behind.
+  clear_country_children <- function(country_id) {
+    state_ids  <- data$states$id[data$states$country_id %in% country_id]
+    county_ids <- data$counties$id[data$counties$country_id %in% country_id]
+    geo$selection$state(setdiff(geo$selection$state(), state_ids))
+    geo$selection$county(setdiff(geo$selection$county(), county_ids))
+  }
+
+  clear_state_children <- function(state_id) {
+    # Counties are keyed only by country (not by state), so deselecting a
+    # state clears its country's county selection.
+    cid <- data$states$country_id[data$states$id == state_id]
+    if (length(cid) == 0L || all(is.na(cid))) return()
+    county_ids <- data$counties$id[data$counties$country_id %in% cid]
+    geo$selection$county(setdiff(geo$selection$county(), county_ids))
+  }
+
+  remove <- function(level, id) {
+    cur <- geo$selection[[level]]()
+    if (!(id %in% cur)) return()
+    geo$selection[[level]](setdiff(cur, id))
+    if (level == "country") {
+      clear_country_children(id)
+    } else if (level == "state") {
+      clear_state_children(id)
+    }
+  }
+
   toggle <- function(level, id) {
     cur <- geo$selection[[level]]()
     if (id %in% cur) {
-      geo$selection[[level]](setdiff(cur, id))
+      remove(level, id)
     } else {
       geo$selection[[level]](c(cur, id))
     }
@@ -84,7 +114,7 @@ admin_picker_page <- function(geo, data, dark_mode) {
     if (length(lvl) != 1L || is.na(lvl) || is.null(e$id)) return()
     if (lvl == 0L) {
       # Countries: clicking a polygon removes it (per design).
-      geo$selection$country(setdiff(geo$selection$country(), e$id))
+      remove("country", e$id)
     } else if (lvl == 1L) {
       toggle("state", e$id)
     } else {

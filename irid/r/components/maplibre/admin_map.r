@@ -7,10 +7,12 @@
 #' interactive, light/dark basemap) flows in as two-way-capable props
 #' bound to the reactive store.
 #'
-#' Geometry is *not* shipped through the widget channel: the three GeoJSON
-#' assets are served at `/geo/*.geojson` (see `addResourcePath` in app.r)
-#' and fetched by the factory directly. Only the compact selection ids
-#' round-trip through irid.
+#' Geometry is *not* shipped through the widget channel: the GeoJSON assets
+#' are served under `/geo/` (see `addResourcePath` in app.r) and fetched by
+#' the factory directly. Countries ship as one small file; states and
+#' counties ship as per-country files so the factory can lazy-load only the
+#' polygons the user selects. Only the compact selection ids round-trip
+#' through irid.
 #'
 #' @md
 #' @name admin_map
