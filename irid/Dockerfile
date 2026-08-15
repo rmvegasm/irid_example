@@ -101,7 +101,7 @@ ARG GID=1000
 RUN groupadd --gid $GID nut \
     && useradd --uid $UID --gid $GID --create-home nut \
     && mkdir -p /logs \
-    && chown nut:nut /logs
+    && chown nut:nut /logs \
     && chown nut:nut /app/irid
 
 # Application code
