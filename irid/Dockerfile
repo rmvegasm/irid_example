@@ -89,7 +89,7 @@ ENV RENV_CONFIG_CACHE_SYMLINKS=FALSE
 # .Rprofile sources renv/activate.R at startup, which sets up library
 # paths (including RENV_PATHS_LIBRARY).  restore() then fills the
 # library with packages.
-RUN R -s -e "renv::restore(prompt = FALSE)"
+RUN R -s -e "renv::init()"
 
 # ── Stage 3: runtime ───────────────────────────────────────────
 #
