@@ -48,11 +48,14 @@ RUN npx tailwindcss \
 # ─────────────────────────────────────────────────────────────────
 FROM posit/r-base:4.5.3-trixie AS renv
 
-# System build dependencies (required to compile R packages)
+# System dependencies. Most are build deps for compiling R packages;
+# gdal-bin (ogr2ogr), curl, and unzip are also runtime deps for the
+# data-raw geo loader (data-raw/generate_geo.R).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       cmake \
       curl \
+      gdal-bin \
       libcurl4-openssl-dev \
       libfontconfig1-dev \
       libfreetype-dev \
@@ -63,6 +66,7 @@ RUN apt-get update \
       libssl-dev \
       libuv1-dev \
       libxml2-dev \
+      unzip \
     && rm -rf /var/lib/apt/lists/*
 
 RUN R -s -e "install.packages('renv', repos = 'https://cloud.r-project.org')"

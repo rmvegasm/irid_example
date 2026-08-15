@@ -30,45 +30,106 @@ box::use(
   if (is.null(a) || length(a) == 0L || (length(a) == 1L && is.na(a))) b else a
 }
 
+#' Is the gadm metadata schema present?
+#'
+#' @param con A DBI connection.
+#' @return TRUE when `gadm.countries` exists (i.e. generate_geo.R has run).
+#' @keywords internal
+geo_schema_ready <- function(con) {
+  out <- dbGetQuery(
+    con,
+    "SELECT to_regclass('gadm.countries') IS NOT NULL AS ready"
+  )
+  isTRUE(out$ready[[1L]])
+}
+
+#' Empty geo metadata matching the real tables' columns
+#'
+#' Returned while the gadm schema has not been created yet, so the app
+#' renders with empty pickers instead of failing its healthcheck.
+#'
+#' @return A list of empty data.frames with the same columns as
+#'   [load_geo()].
+#' @keywords internal
+empty_geo <- function() {
+  list(
+    countries = data.frame(
+      id          = character(),
+      name        = character(),
+      engtype     = character(),
+      admin_level = integer(),
+      country_id  = character(),
+      stringsAsFactors = FALSE
+    ),
+    states = data.frame(
+      id          = character(),
+      name        = character(),
+      engtype     = character(),
+      admin_level = integer(),
+      country_id  = character(),
+      state_id    = character(),
+      stringsAsFactors = FALSE
+    ),
+    counties = data.frame(
+      id          = character(),
+      name        = character(),
+      engtype     = character(),
+      admin_level = integer(),
+      country_id  = character(),
+      state_id    = character(),
+      stringsAsFactors = FALSE
+    )
+  )
+}
+
 #' Load the three admin-level metadata tables
 #'
 #' Reads `gadm.countries`, `gadm.states`, and `gadm.counties` and returns
-#' them as data.frames. Cached in `.geo_cache` after the first call.
+#' them as data.frames. Cached in `.geo_cache` after the first successful
+#' load. When the gadm schema does not exist yet (generate_geo.R has not
+#' run), returns empty metadata *without* caching so the app still starts
+#' and later sessions pick up the data once it has been loaded.
 #'
 #' @return A list with `countries`, `states`, and `counties` data.frames.
 #'   Common columns: `id`, `name`, `admin_level`, `engtype`. `states` has
 #'   `country_id`; `counties` has `country_id` and `state_id`.
 #' @export
 load_geo <- function() {
-  if (is.null(.geo_cache$data)) {
-    con <- connect()
-    on.exit(disconnect(con))
-
-    countries <- dbGetQuery(
-      con,
-      "SELECT id, name, engtype, admin_level, country_id
-       FROM gadm.countries
-       ORDER BY name"
-    )
-    states <- dbGetQuery(
-      con,
-      "SELECT id, name, engtype, admin_level, country_id, state_id
-       FROM gadm.states
-       ORDER BY name"
-    )
-    counties <- dbGetQuery(
-      con,
-      "SELECT id, name, engtype, admin_level, country_id, state_id
-       FROM gadm.counties
-       ORDER BY name"
-    )
-
-    .geo_cache$data <- list(
-      countries = countries,
-      states    = states,
-      counties  = counties
-    )
+  if (!is.null(.geo_cache$data)) {
+    return(.geo_cache$data)
   }
+
+  con <- connect()
+  on.exit(disconnect(con))
+
+  if (!geo_schema_ready(con)) {
+    return(empty_geo())
+  }
+
+  countries <- dbGetQuery(
+    con,
+    "SELECT id, name, engtype, admin_level, country_id
+     FROM gadm.countries
+     ORDER BY name"
+  )
+  states <- dbGetQuery(
+    con,
+    "SELECT id, name, engtype, admin_level, country_id, state_id
+     FROM gadm.states
+     ORDER BY name"
+  )
+  counties <- dbGetQuery(
+    con,
+    "SELECT id, name, engtype, admin_level, country_id, state_id
+     FROM gadm.counties
+     ORDER BY name"
+  )
+
+  .geo_cache$data <- list(
+    countries = countries,
+    states    = states,
+    counties  = counties
+  )
   .geo_cache$data
 }
 
@@ -119,6 +180,19 @@ filter_by_state <- function(meta, state_ids) {
   meta[meta$state_id %in% state_ids, , drop = FALSE]
 }
 
+#' Is the gadm.admin_geojson() function present?
+#'
+#' @param con A DBI connection.
+#' @return TRUE when the GeoJSON SQL function exists.
+#' @keywords internal
+geo_json_ready <- function(con) {
+  out <- dbGetQuery(
+    con,
+    "SELECT to_regprocedure('gadm.admin_geojson(integer,text)') IS NOT NULL AS ready"
+  )
+  isTRUE(out$ready[[1L]])
+}
+
 #' Serve one GeoJSON FeatureCollection from `gadm.admin_geojson()`
 #'
 #' Shiny `registerDataObj` filter. `data` is unused (the handler opens its
@@ -144,6 +218,14 @@ geo_dataobj_handler <- function(data, req) {
 
   con <- connect()
   on.exit(disconnect(con))
+
+  if (!geo_json_ready(con)) {
+    return(httpResponse(
+      status       = 200L,
+      content_type = "application/json",
+      content      = '{"type":"FeatureCollection","features":[]}'
+    ))
+  }
 
   geojson <- dbGetQuery(
     con,

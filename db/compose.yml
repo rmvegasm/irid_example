@@ -9,8 +9,6 @@ services:
     volumes:
       - ./pgdata:/var/lib/postgresql
       - ./pginit:/docker-entrypoint-initdb.d
-    ports:
-      - "${POSTGRES_HOST_PORT:-5432}:5432"
     expose:
       - 5432
     healthcheck:

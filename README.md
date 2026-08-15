@@ -56,8 +56,13 @@ data through the irid wire channel: `admin_geojson` GeoJSON for the map
 the lightweight metadata views for labels, selected-unit chips, and
 parent/child cascade cleanup.
 
-The heavy geospatial stack (GDAL/sf) is dev-only, not an app dependency.
-Run `Rscript data-raw/generate_geo.R` to load or refresh the data
+The loader runs inside the irid image (via `docker compose exec`), which
+ships GDAL (`ogr2ogr`), curl, and unzip for this purpose — the geospatial
+stack never has to be installed on the host. Until the loader has run, the
+app degrades gracefully: `load_geo()` returns empty metadata and the map
+serves an empty FeatureCollection, so the container still passes its
+healthcheck. Load or refresh the data with
+`docker compose exec irid Rscript data-raw/generate_geo.R`
 (`--refresh-units` rebuilds the dissolved table from the raw import;
 `--drop-raw` drops the ~2.4 GB raw import afterward to reclaim disk).
 
@@ -67,17 +72,16 @@ Run `Rscript data-raw/generate_geo.R` to load or refresh the data
 # 1. Copy environment template
 cp .env.example .env
 
-# 2. Build and start the database + load GADM data
-docker compose up -d db
-
-#    Load .env into the shell so host-side tools (generate_geo.R) see
-#    config such as POSTGRES_HOST_PORT and the POSTGRES_* credentials.
-set -a; . ./.env; set +a
-Rscript data-raw/generate_geo.R
-
-# 3. Build and start the rest of the stack
+# 2. Build and start everything. The app starts with empty pickers
+#    before geo data is loaded, so it passes its healthcheck and caddy
+#    comes up too.
 docker compose build
 docker compose up -d
+
+# 3. Load GADM boundaries into PostGIS using the irid image's R env.
+#    data-raw is bind-mounted at /app/irid/data-raw, so the script and
+#    the downloaded GeoPackage are shared with the host tree.
+docker compose exec irid Rscript data-raw/generate_geo.R
 
 # 4. Visit in browser
 open http://localhost:8080

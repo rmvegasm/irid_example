@@ -200,10 +200,18 @@ Administrative polygons live in PostgreSQL/PostGIS, not in static files or
   cascade cleanup — geometry and option lists never travel through the
   Shiny/irid wire channel.
 
-This keeps the heavy geospatial stack (`sf`, GDAL, `ogr2ogr`) confined
- to the dev-time generator, not the app runtime. Re-run the script after
-the GeoPackage changes, and pass `--refresh-units` to rebuild the dissolved
-table from `gadm.raw`.
+- Before the generator has run, the app degrades gracefully: `load_geo()`
+  returns empty metadata (without caching it) and GeoJSON fetches serve an
+  empty FeatureCollection, so the irid container passes its healthcheck and
+  can be populated in place afterward.
+
+This keeps the heavy geospatial stack (`ogr2ogr`/GDAL, curl, unzip)
+confined to the generator — R package code never depends on it. The
+generator runs inside the irid image
+(`docker compose exec irid Rscript data-raw/generate_geo.R`), so
+the host needs no geospatial toolchain. Re-run it after the GeoPackage
+changes, and pass `--refresh-units` to rebuild the dissolved table from
+`gadm.raw`.
 
 ## Legacy modules (mtcars explorer)
 

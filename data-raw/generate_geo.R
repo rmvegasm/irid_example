@@ -39,15 +39,22 @@
 # into `gadm.units.engtype` (falling back to the local TYPE_* label), so
 # the app can show per-unit type badges and dynamic picker labels.
 #
-# Usage:
+# Usage (run from the project root; it executes inside the irid container,
+# which already has the R packages and GDAL/ogr2ogr):
+#   docker compose exec irid Rscript data-raw/generate_geo.R
+#   docker compose exec irid Rscript data-raw/generate_geo.R --refresh-units
+#   docker compose exec irid Rscript data-raw/generate_geo.R --drop-raw
+#
+# A host run is still possible when DBI/RPostgres + GDAL (ogr2ogr) + curl +
+# unzip are installed locally:
 #   Rscript data-raw/generate_geo.R
-#   Rscript data-raw/generate_geo.R --refresh-units   # rebuild units from raw
-#   Rscript data-raw/generate_geo.R --drop-raw        # reclaim disk after build
 #
 # Connection settings come from the standard PG* environment variables.
-# The port defaults to POSTGRES_HOST_PORT (the host-published port from
-# .env), because this script runs on the host and reaches the DB through
-# the compose port mapping; it falls back to PGPORT/5432 for manual runs.
+# The normal path runs this script inside the irid container, where compose
+# sets PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE and the script reaches the
+# `db` service over the compose network. On the host, set PGHOST=localhost
+# and PGPORT to the host-published port (or reach the DB with
+# `docker compose exec db psql …`).
 # Credentials fall back to the POSTGRES_* names used in .env.
 # ─────────────────────────────────────────────────────────────────────
 
@@ -69,7 +76,7 @@ GADM_GPKG <- file.path(GADM_DIR, "gadm_410.gpkg")
 SIMPLIFY_TOL <- 0.01
 
 db_host <- Sys.getenv("PGHOST", "localhost")
-db_port <- Sys.getenv("POSTGRES_HOST_PORT", Sys.getenv("PGPORT", "5432"))
+db_port <- Sys.getenv("PGPORT", "5432")
 db_user <- Sys.getenv("PGUSER", Sys.getenv("POSTGRES_USER", "postgres"))
 db_pass <- Sys.getenv("PGPASSWORD", Sys.getenv("POSTGRES_PASSWORD", "postgres"))
 db_name <- Sys.getenv("PGDATABASE", Sys.getenv("POSTGRES_DB", "irid_example"))

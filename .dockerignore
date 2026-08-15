@@ -2,3 +2,9 @@
 # The image gets its library from the renv stage, built for the
 # container's R version and platform.
 irid/renv/library
+
+# Large generated data — never part of the image.
+# pgdata is the live database; data-raw/*.gpkg|zip are mounted at runtime.
+db/pgdata/
+data-raw/gadm_410.gpkg
+data-raw/gadm_410-gpkg.zip

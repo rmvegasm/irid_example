@@ -16,6 +16,8 @@ services:
             - assets/css/app.css
     expose:
       - 3839
+    volumes:
+      - ../data-raw:/app/irid/data-raw
     environment:
       PGHOST: db
       PGPORT: 5432
