@@ -75,9 +75,6 @@ WORKDIR /app/irid
 
 # Minimal renv infrastructure — only what restore() needs
 COPY irid/renv.lock .
-COPY irid/.Rprofile .
-COPY irid/renv/activate.R renv/
-COPY irid/renv/settings.json renv/
 
 # Store the library outside the project tree so it survives
 # independent of app-code COPY instructions in downstream stages.
