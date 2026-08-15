@@ -76,10 +76,6 @@ WORKDIR /app/irid
 # Minimal renv infrastructure — only what restore() needs
 COPY irid/renv.lock .
 
-# Store the library outside the project tree so it survives
-# independent of app-code COPY instructions in downstream stages.
-ENV RENV_PATHS_LIBRARY=/renv/lib
-
 # Packages must be copied, not symlinked, into the project library.
 # By default renv symlinks into its cache (~/.cache/R/renv), but
 # that cache is under /root and inaccessible to the non-root user
@@ -89,7 +85,7 @@ ENV RENV_CONFIG_CACHE_SYMLINKS=FALSE
 # .Rprofile sources renv/activate.R at startup, which sets up library
 # paths (including RENV_PATHS_LIBRARY).  restore() then fills the
 # library with packages.
-RUN R -s -e "renv::init()"
+RUN R -s -e "renv::init(); renv::restore()"
 
 # ── Stage 3: runtime ───────────────────────────────────────────
 #
@@ -99,15 +95,6 @@ RUN R -s -e "renv::init()"
 # ─────────────────────────────────────────────────────────────────
 FROM renv AS runtime
 
-# Carry forward the library path so renv/activate.R finds packages
-ENV RENV_PATHS_LIBRARY=/renv/lib
-
-# Copy the pre-built R package library from the renv stage.
-# This is the expensive artifact — it only changes when renv.lock
-# changes, so Docker's layer cache keeps it fresh across code-only
-# rebuilds.
-COPY --from=renv /renv/lib /renv/lib
-
 # Non-root user (matches host UID/GID for volume mounts)
 ARG UID=1000
 ARG GID=1000
@@ -115,9 +102,10 @@ RUN groupadd --gid $GID nut \
     && useradd --uid $UID --gid $GID --create-home nut \
     && mkdir -p /logs \
     && chown nut:nut /logs
+    && chown nut:nut /app/irid
 
 # Application code
-COPY --chown=nut:nut irid/ /app/irid/
+COPY --chown=nut:nut irid/app.r irid/assets irid/r irid/config.yml /app/irid/
 
 # Compiled CSS from stage 1
 COPY --chown=nut:nut --from=css \
