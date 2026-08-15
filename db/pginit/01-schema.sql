@@ -2,6 +2,12 @@
 -- Database schema for the compose example project
 -- ────────────────────────────────────────────────────────────────
 
+-- PostGIS is required by the GADM administrative-boundary pipeline
+-- (see data-raw/generate_geo.R). The generator also creates this
+-- extension idempotently for databases that were initialized before
+-- the postgis image was in use.
+CREATE EXTENSION IF NOT EXISTS postgis;
+
 CREATE TABLE IF NOT EXISTS users (
     id          SERIAL PRIMARY KEY,
     username    VARCHAR(255) UNIQUE NOT NULL,

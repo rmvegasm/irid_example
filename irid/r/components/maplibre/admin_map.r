@@ -7,12 +7,12 @@
 #' interactive, light/dark basemap) flows in as two-way-capable props
 #' bound to the reactive store.
 #'
-#' Geometry is *not* shipped through the widget channel: the GeoJSON assets
-#' are served under `/geo/` (see `addResourcePath` in app.r) and fetched by
-#' the factory directly. Countries ship as one small file; states and
-#' counties ship as per-country files so the factory can lazy-load only the
-#' polygons the user selects. Only the compact selection ids round-trip
-#' through irid.
+#' Geometry is *not* shipped through the widget channel: the widget fetches
+#' GeoJSON from a per-session Shiny data object backed by the PostGIS
+#' function `gadm.admin_geojson()` (see `r/geo`). Countries are one small
+#' FeatureCollection fetched up front; states and counties are fetched per
+#' country so the factory can lazy-load only the polygons the user selects.
+#' Only the compact selection ids round-trip through irid.
 #'
 #' @md
 #' @name admin_map
@@ -56,6 +56,9 @@ maplibre_deps <- function() {
 #'   admin-2 ids.
 #' @param active_level Callable returning one of "country", "state", "county".
 #' @param dark_mode Callable returning a logical; drives the basemap style.
+#' @param geo_base_url Callable returning the per-session GeoJSON data-object
+#'   URL (see `r/geo$geo_dataobj_url`). The JS widget fetches polygons from
+#'   it instead of from static `/geo/*` files.
 #' @param on_feature_click Function called with the `feature-click` payload
 #'   (`list(id = …, adminLevel = …)`).
 #' @return An `irid_widget` construct.
@@ -66,6 +69,7 @@ MaplibreAdmin <- function(
   selected_counties,
   active_level,
   dark_mode,
+  geo_base_url,
   on_feature_click = NULL
 ) {
   IridWidget(
@@ -75,7 +79,8 @@ MaplibreAdmin <- function(
       selectedStates    = selected_states,
       selectedCounties  = selected_counties,
       activeLevel       = active_level,
-      darkMode          = dark_mode
+      darkMode          = dark_mode,
+      geoBaseUrl        = geo_base_url
     ),
     events = list(
       `feature-click` = on_feature_click

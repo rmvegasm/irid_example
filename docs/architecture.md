@@ -45,7 +45,7 @@ irid_example/
 ├── compose.yml                  # root: name + include stanzas
 ├── .env                         # single env file for all services
 ├── docs/                        # this documentation
-├── data-raw/generate_geo.R      # regenerates the bundled geo assets
+├── data-raw/generate_geo.R      # loads GADM 4.1 boundaries into PostGIS
 ├── db/                          # PostgreSQL service + init scripts
 ├── caddy/                       # reverse proxy
 ├── pginit/                      # DB schema + demo seed
@@ -57,8 +57,7 @@ irid_example/
     ├── renv.lock / .Rprofile    # pinned R packages
     ├── assets/
     │   ├── css/                 # Tailwind source + build script
-    │   ├── js/                  # widget factories (dark-mode, maplibre)
-    │   └── geo/                 # countries.geojson + per-country states/counties + *_meta.json
+    │   └── js/                  # widget factories (dark-mode, maplibre)
     └── r/
         ├── components/
         │   ├── elements/        # atoms (alert, badge, buttons, inputs)
@@ -118,8 +117,9 @@ Two module groups sit beside the components rather than in the hierarchy:
 
 - `maplibre/` --- domain-specific pieces for the admin picker: the
   `MaplibreAdmin` widget and the reusable `admin_picker` component.
-- `geo/` --- data layer: `load_geo()` plus `lookup_names()` and
-  `filter_by_country()` helpers.
+- `geo/` --- data layer: `load_geo()` plus `lookup_names()`,
+  `filter_by_country()`, `filter_by_state()`, and the per-session GeoJSON
+  endpoint registration (`geo_dataobj_url()`).
 
 `server/` holds handlers that need a Shiny server context (login/logout),
 and `db/` wraps PostgreSQL. Both are decoupled from any single app by
@@ -157,7 +157,8 @@ that need it.
 2. Loads the geo metadata once (`load_geo()` caches per process).
 3. Builds handler closures from the auth store (`handle_login`,
    `handle_logout`).
-4. Registers `addResourcePath` for `css/`, `js/`, and `geo/` assets.
+4. Registers `addResourcePath` for `css/` and `js/` assets (GeoJSON is
+   served dynamically from PostGIS, not from a static path).
 5. Returns `app_shell(...)` containing a hidden `dark-mode-detector`
    widget and a top-level `When()` that swaps between `login_page` and
    `admin_picker_page` based on `state$auth$logged_in()`.
@@ -168,24 +169,41 @@ Docker build (or `irid/assets/css/build.sh` locally).
 
 ## The geo data pipeline
 
-Administrative polygons ship as static files, not as `sf` objects in R:
+Administrative polygons live in PostgreSQL/PostGIS, not in static files or
+`sf` objects in R:
 
-- `data-raw/generate_geo.R` produces
-  `irid/assets/geo/{countries,states,counties}.geojson` plus a compact
-  `*_meta.json` per level (id, name, admin_level, parent linkage). It also
-  splits states and counties into per-country files under
-  `irid/assets/geo/{states,counties}/{country_id}.geojson`.
-- Parent linkage: states carry `country_id`; counties also carry only
-  `country_id` (no `state_id`), so county selection can only be cascaded
-  by country, not by individual state.
-- `r/geo` reads only the `*_meta.json` files into data.frames at startup.
-- The map widget fetches `countries.geojson` up front (it is small) and
-  lazy-loads the per-country states/counties files as countries are
-  selected; geometry never travels through the Shiny/irid wire channel.
+- `data-raw/generate_geo.R` downloads (when needed) the GADM 4.1
+  GeoPackage, imports its leaf rows into `gadm.raw` via `ogr2ogr`, and
+  dissolves them into a `gadm.units` table with one row per admin-0 /
+  admin-1 / admin-2 unit. GADM stores only the deepest subdivision per
+  row, so a state (or county) that has children must be reconstructed by
+  unioning its descendants. (`--drop-raw` drops the ~2.4 GB raw import
+  after a successful build to reclaim disk; the dissolve can always be
+  rebuilt from the GeoPackage.)
+- The table keeps `id`, `name`, `admin_level` (0/1/2), `country_id`,
+  `parent_id`, `engtype` (GADM's `ENGTYPE_*`, falling back to `TYPE_*`),
+  and `geom`, with a GIST index plus btree indexes on the id/foreign-key
+  columns (including `(admin_level, country_id)` and
+  `(admin_level, parent_id)` for child lookups).
+- `gadm.admin_geojson(level, countries)` is the parametrized GeoJSON
+  function: it returns a FeatureCollection built with `ST_AsGeoJSON`, and
+  three thin views (`gadm.countries`, `gadm.states`, `gadm.counties`)
+  expose picker metadata.
+- Parent linkage is the point of the redesign: counties carry a real
+  `state_id` (`parent_id` = their `GID_1`), so county selection cascades
+  by state, not only by country.
+- Two per-session Shiny data objects serve the browser directly: the map
+  widget fetches GeoJSON from `gadm.admin_geojson()` (lazy-loaded per
+  selected country), and the picker widgets fetch unit metadata from
+  `r/geo$geo_meta_url` (cached client-side per level/parents). R itself
+  only loads the metadata views for labels, selected-unit chips, and
+  cascade cleanup — geometry and option lists never travel through the
+  Shiny/irid wire channel.
 
-This keeps the heavy geospatial stack (`rnaturalearth`, geoBoundaries)
-confined to the dev-time generator, not the app runtime. Re-run the script
-only if the curated country list or simplification tolerances change.
+This keeps the heavy geospatial stack (`sf`, GDAL, `ogr2ogr`) confined
+ to the dev-time generator, not the app runtime. Re-run the script after
+the GeoPackage changes, and pass `--refresh-units` to rebuild the dissolved
+table from `gadm.raw`.
 
 ## Legacy modules (mtcars explorer)
 

@@ -85,10 +85,10 @@ init](#sync-handle-async-init)).
  └─────────────────┘ └────────────────────handler────────────────────┘         └──────────┘                          │                  │◀─────click──────│            │
                                                                                                                 ┌───▶│                  │                 └────────────┘
                                                                                                                 │    │                  │
-                                                                         ┌──────────────────────────┐────fetch──┘    └──────────────────┘
-                                                                         │/geo/* (lazy per-country) │
-                                                                         │                          │
-                                                                         └──────────────────────────┘
+                                                                         ┌───────────────────────────┐────fetch──┘    └──────────────────┘
+                                                                         │PostGIS data object (geo) │
+                                                                         │admin_geojson(level, …)   │
+                                                                         └───────────────────────────┘
 ```
 
 ▶ Diagram source: [maplibre-widget.d2](maplibre-widget.d2)
@@ -103,13 +103,16 @@ which flows back down as new props.
 
 ## Props: server to client
 
-`MaplibreAdmin()` declares five callable props:
+`MaplibreAdmin()` declares six callable props:
 
 - `selectedCountries`, `selectedStates`, `selectedCounties` --- character
   vectors of selected ids, bound to `geo$selection$*`.
 - `activeLevel` --- `"country"` | `"state"` | `"county"`, bound to
   `geo$active_level`.
 - `darkMode` --- logical, bound to `state$dark_mode`.
+- `geoBaseUrl` --- the per-session PostGIS GeoJSON data-object URL, from
+  `r/geo$geo_dataobj_url()`; the JS appends `level`/`country` query
+  parameters.
 
 Because each is callable, a change to the store sends only that prop in the
 next `update()` call --- the widget re-applies filters or the basemap
@@ -131,12 +134,12 @@ the user clicks a polygon of the currently active level. The R handler
 (`on_map_click` in `admin_picker_page.r`) decides what the click means:
 remove for countries, toggle for states and counties. Removing a unit also
 clears any selected children in lower admin levels (deselecting a country
-clears its states and counties; deselecting a state clears its country's
-counties). Counties carry only a `country_id`, not a `state_id`, so a
-state deselect clears the whole country's county selection --- the finest
-cascade the current data supports. Keeping that policy in R means the
-widget stays behaviour-agnostic --- it only reports *what was clicked*,
-never *what to do about it*.
+clears its states and counties; deselecting a state clears that state's
+counties). Counties carry a real `state_id` (their parent `GID_1`), so a
+state deselect only clears that state's counties --- the cascade the
+GADM-backed pipeline restored. Keeping that policy in R means the widget
+stays behaviour-agnostic --- it only reports *what was clicked*, never
+*what to do about it*.
 
 ## Dependencies
 
@@ -149,16 +152,20 @@ The wrapper returns two `html_dependency` objects:
 irid delivers a widget's deps at mount time via `insertUI`, so they are
 loaded even for widgets that appear only inside a `When`/`Each` branch.
 
-## Geometry stays out of the wire
+## Geometry and picker metadata stay out of the wire
 
-The GeoJSON files are served as static assets under `/geo/`. Countries are
-one small file (`/geo/countries.geojson`) fetched up front; states and
-counties are split per country (`/geo/states/{id}.geojson` and
-`/geo/counties/{id}.geojson`) and lazy-loaded by the factory as countries
-are selected. R only ever loads the compact `*_meta.json` tables for the
-pickers. Only the tiny selection-id vectors round-trip through irid. This
-is the central performance decision of the app: never serialize polygons
-through Shiny.
+GeoJSON is served dynamically from PostGIS, not from static files. `r/geo`
+registers two per-session Shiny data objects: one whose filter calls
+`gadm.admin_geojson(level, countries)` (the `geoBaseUrl` prop), and one that
+serves picker metadata (`r/geo$geo_meta_url`). Countries are one small
+FeatureCollection fetched up front; states and counties are fetched per
+country (`&country=…`) and lazy-loaded by the factory as countries are
+selected. The picker widgets fetch unit metadata per (level, parents) and
+cache it client-side, so picker interactions never round-trip through R.
+Only the tiny selection-id vectors round-trip through irid. This is the
+central performance decision of the app: never serialize polygons *or*
+option lists through Shiny --- PostGIS streams them straight to the browser
+as GeoJSON/JSON.
 
 ## The JS factory, section by section
 
@@ -169,7 +176,8 @@ the decisions worth understanding before modifying it.
 
 The factory returns its `{ update, destroy }` handle immediately and kicks
 off construction in the background: it waits for the `window.maplibregl`
-global and fetches the small `countries.geojson` file, then builds the map.
+global and fetches the small countries FeatureCollection from the
+PostGIS-backed data object, then builds the map.
 `update()` merges values into a local `state` object right away; the map
 applies the latest state once construction finishes. This works on every
 irid version (irid >= 0.3.0 also awaits async factories), and keeps
@@ -180,17 +188,23 @@ irid version (irid >= 0.3.0 also awaits async factories), and keeps
 The heavy states/counties payloads are never downloaded up front. The
 factory keeps per-country caches (`statesCache`, `countiesCache`), a set of
 loaded ids (so a 404 or a completed fetch is never re-requested), and
-in-flight dedupes. `ensureLevel(levelName, countryIds)` fetches
-`/geo/{levelName}/{id}.geojson` for any id not already loaded, merges the
-returned features into a rebuilt FeatureCollection, and pushes it into the
-maplibre source with `setData()`.
+in-flight dedupes. `ensureLevel(levelName, countryIds)` builds a
+data-object URL with `level=…&country=…` for any id not already loaded,
+merges the returned features into a rebuilt FeatureCollection, and pushes
+it into the maplibre source with `setData()`.
 
 Selection changes drive the pre-fetching:
 
 - selecting a country pre-fetches its states (the next level down);
 - selecting a state pre-fetches its country's counties;
 - switching `activeLevel` is a safety net that loads the newly active
-  level if the pre-fetch above never ran.
+  level if the pre-fetch above never ran, then fits the viewport to the
+  polygons now in scope.
+
+At the county level the layer filter narrows to the selected *parents*:
+counties are filtered by `state_id` when states are selected, otherwise by
+`country_id`. That way switching to the third level shows only the counties
+within the chosen states and zooms to their extent.
 
 Fetched features stay in their source after their country is deselected;
 the layer filters hide them. Re-selecting the same country therefore never
@@ -264,9 +278,10 @@ The factory leaves three globals for browser-console inspection:
   per-country file was fetched and merged.
 
 A blank map or missing polygons is usually a JS error in the factory ---
-check the console and confirm the `/geo/countries.geojson` fetch returned
-200, and that `/geo/states/{id}.geojson` / `/geo/counties/{id}.geojson`
-fetches return 200 (or a cached 404) when countries are selected. Remember
-that `curl` on the page HTML shows empty `<!--irid:s:...-->` comment
-anchors; irid mounts control-flow content client-side, so a browser (not
-`curl`) is the right tool for verifying render output.
+check the console and confirm the countries data-object fetch returned 200,
+and that the per-country states/counties fetches return 200 (or a cached
+404) when countries are selected. The data-object URL is available as
+`window.__adminState.geoBaseUrl`. Remember that `curl` on the page HTML
+shows empty `<!--irid:s:...-->` comment anchors; irid mounts control-flow
+content client-side, so a browser (not `curl`) is the right tool for
+verifying render output.

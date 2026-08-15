@@ -24,7 +24,7 @@ connect <- function() {
     port     = as.integer(Sys.getenv("PGPORT", "5432")),
     user     = Sys.getenv("PGUSER", "postgres"),
     password = Sys.getenv("PGPASSWORD", "postgres"),
-    dbname   = Sys.getenv("PGDATABASE", "compose_example")
+    dbname   = Sys.getenv("PGDATABASE", "irid_example")
   )
 }
 

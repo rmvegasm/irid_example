@@ -37,14 +37,14 @@ box::use(
 )
 
 # ── Static assets ───────────────────────────────────────────────
-# Serve CSS, JS, and GeoJSON from irid/assets/ — same layout as the host
-# project tree. Shiny's default www/ directory is not used.
+# Serve CSS and JS from irid/assets/ — same layout as the host
+# project tree. Shiny's default www/ directory is not used. GeoJSON is
+# served dynamically from PostGIS via r/geo, not from a static path.
 #
 # In Docker:     /app/irid/assets/   (copied at build time)
 # Local dev:     ./assets/           (relative to irid/)
 addResourcePath("css", "assets/css")
 addResourcePath("js", "assets/js")
-addResourcePath("geo", "assets/geo")
 
 # ── App configuration (reads env vars via config.yml) ───────────
 cfg <- config::get()

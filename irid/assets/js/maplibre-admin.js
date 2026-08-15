@@ -15,6 +15,7 @@
  *   selectedCounties:  string[]   admin-2 ids currently selected
  *   activeLevel:       "country" | "state" | "county"
  *   darkMode:          boolean
+ *   geoBaseUrl:        string   per-session GeoJSON data-object URL
  *
  * Client → server event:
  *   feature-click: { id, adminLevel } — a feature of the active level was
@@ -22,12 +23,13 @@
  *   states/counties) so the widget stays behaviour-agnostic.
  *
  * Polygon loading strategy (performance):
- *   - countries.geojson is small, so it is fetched up front and the map
- *     is built as soon as it (and maplibregl) arrive. The heavy
+ *   - countries are small, so they are fetched up front and the map is
+ *     built as soon as they (and maplibregl) arrive. The heavy
  *     states/counties payloads are NEVER fetched eagerly.
- *   - states and counties are split into per-country files on the server
- *     (`/geo/states/{id}.geojson`, `/geo/counties/{id}.geojson`) and are
- *     lazy-loaded as the user selects countries.
+ *   - All GeoJSON comes from a per-session Shiny data object backed by
+ *     PostGIS (`gadm.admin_geojson()`); the base URL arrives as the
+ *     `geoBaseUrl` prop and the factory appends `level`/`country` query
+ *     parameters.
  *   - Fetched features are cached by country id and stay in their source
  *     even when the country is deselected, so re-selecting never
  *     re-downloads. Filters hide them instead of removing them.
@@ -190,7 +192,6 @@
         id: "counties-fill",
         type: "fill",
         source: "counties",
-        minzoom: 4,
         paint: {
           "fill-color": "#f59e0b",
           "fill-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 0.72, 0.01]
@@ -200,7 +201,6 @@
         id: "counties-line",
         type: "line",
         source: "counties",
-        minzoom: 4,
         paint: {
           "line-color": "#b45309",
           "line-width": ["case", ["boolean", ["feature-state", "hover"], false], 2, 0.7],
@@ -256,7 +256,8 @@
       selectedStates: toArray(props.selectedStates),
       selectedCounties: toArray(props.selectedCounties),
       activeLevel: props.activeLevel || "country",
-      darkMode: !!props.darkMode || systemPrefersDark()
+      darkMode: !!props.darkMode || systemPrefersDark(),
+      geoBaseUrl: props.geoBaseUrl || ""
     };
     var prevCountryKey = state.selectedCountries.slice().sort().join("|");
     var map = null;
@@ -266,10 +267,10 @@
     var userInteracting = false;
 
     // ── lazy per-country polygon loading ────────────────────────
-    // States and counties are served one file per parent country. The cache
-    // maps country id → Feature[]; `loaded` records that a fetch (or a 404)
-    // completed so we never re-request the same country; `inFlight` dedupes
-    // concurrent requests for the same country.
+    // States and counties are served one FeatureCollection per parent
+    // country. The cache maps country id → Feature[]; `loaded` records that
+    // a fetch (or a 404) completed so we never re-request the same country;
+    // `inFlight` dedupes concurrent requests for the same country.
     var statesCache = {};
     var countiesCache = {};
     var statesLoaded = {};
@@ -287,6 +288,17 @@
 
     function cacheFor(levelName) {
       return levelName === "states" ? statesCache : countiesCache;
+    }
+
+    // Build a GeoJSON data-object URL for a level (and optional country).
+    // The base URL is registered per session by R (`r/geo$geo_dataobj_url`)
+    // and already carries its own query string, so append with `&`.
+    function geoURL(levelName, countryId) {
+      if (!state.geoBaseUrl) return null;
+      var url = state.geoBaseUrl;
+      url += (url.indexOf("?") >= 0 ? "&" : "?") + "level=" + encodeURIComponent(levelName);
+      if (countryId) url += "&country=" + encodeURIComponent(countryId);
+      return url;
     }
 
     function loadedFor(levelName) {
@@ -323,20 +335,23 @@
 
     // Fetch (if not already fetched) the per-country files for `countryIds`
     // and merge their features into the level's source. Returns a promise
-    // that resolves once the source has been refreshed.
+    // that resolves once the source has been refreshed. Any in-flight request
+    // for a country is awaited rather than treated as "nothing to do", so
+    // callers that fit the viewport after loading don't run too early.
     function ensureLevel(levelName, countryIds) {
       var cache = cacheFor(levelName);
       var loaded = loadedFor(levelName);
       var inFlight = inFlightFor(levelName);
 
-      var toFetch = [];
+      var pending = [];
       (countryIds || []).forEach(function (cid) {
-        if (cid && !loaded[cid] && !inFlight[cid]) toFetch.push(cid);
-      });
-      if (!toFetch.length) return Promise.resolve();
-
-      var fetches = toFetch.map(function (cid) {
-        var url = "/geo/" + levelName + "/" + encodeURIComponent(cid) + ".geojson";
+        if (!cid || loaded[cid]) return;
+        if (inFlight[cid]) {
+          pending.push(inFlight[cid]);
+          return;
+        }
+        var url = geoURL(levelName, cid);
+        if (!url) return; // no data-object URL yet; retry on a later update
         var p = fetchJSON(url).then(function (fc) {
           cache[cid] = (fc && fc.features) ? fc.features : [];
           loaded[cid] = true;
@@ -351,10 +366,11 @@
           delete inFlight[cid];
         });
         inFlight[cid] = p;
-        return p;
+        pending.push(p);
       });
 
-      return Promise.all(fetches).then(function () {
+      if (!pending.length) return Promise.resolve();
+      return Promise.all(pending).then(function () {
         refreshSource(levelName);
       });
     }
@@ -390,13 +406,15 @@
       map.setFilter("countries-fill", ["in", ["get", "id"], ["literal", sc]]);
       map.setFilter("countries-line", ["in", ["get", "id"], ["literal", sc]]);
 
-      // States/counties: every polygon within the selected countries is
-      // rendered (line = visible border; fill = coloured when selected,
-      // transparent-but-clickable when not).
+      // States: every polygon within the selected countries is rendered.
+      // Counties: only those within the selected *parents* — the selected
+      // states when any are chosen, otherwise the selected countries.
+      var inStates = ["in", ["get", "state_id"], ["literal", ss]];
+      var inCounties = ss.length ? inStates : inCountries;
       map.setFilter("states-fill", inCountries);
       map.setFilter("states-line", inCountries);
-      map.setFilter("counties-fill", inCountries);
-      map.setFilter("counties-line", inCountries);
+      map.setFilter("counties-fill", inCounties);
+      map.setFilter("counties-line", inCounties);
 
       // The fill/line styling branches on the selection, so refresh the paint
       // expressions whenever the selection changes.
@@ -426,9 +444,25 @@
       }
     }
 
+    // Fly to the given bbox using map.flyTo() for a curved, "flying"
+    // transition instead of fitBounds' pan-and-zoom slide. cameraForBounds
+    // converts the bbox to a target center/zoom; flyTo animates there.
+    function flyToBounds(bbox, maxZoom) {
+      var cam = map.cameraForBounds(bbox, { padding: 80, maxZoom: maxZoom });
+      if (!cam) return;
+      map.flyTo({
+        center: cam.center,
+        zoom: cam.zoom,
+        curve: 1.5,
+        speed: 1.2,
+        screenSpeed: 4,
+        maxDuration: 2500
+      });
+    }
+
     function fitToSelectedCountries() {
       if (!state.selectedCountries.length) {
-        map.flyTo({ center: [0, 25], zoom: 1.3, duration: 600 });
+        map.flyTo({ center: [0, 25], zoom: 1.3, duration: 1000 });
         return;
       }
       // Compute the bbox from the ORIGINAL fetched features, not from
@@ -442,7 +476,65 @@
       });
       var bbox = bboxOfFeatures(feats);
       if (bbox) {
-        map.fitBounds(bbox, { padding: 80, maxZoom: 6, duration: 600 });
+        flyToBounds(bbox, 6);
+      }
+    }
+
+    // States currently in scope for level 1: every state within the selected
+    // countries. Used to fit the viewport when switching to the state level.
+    function statesInScope() {
+      var sc = state.selectedCountries || [];
+      var feats = [];
+      Object.keys(statesCache).forEach(function (cid) {
+        (statesCache[cid] || []).forEach(function (f) {
+          if (sc.indexOf(f.properties.country_id) >= 0) feats.push(f);
+        });
+      });
+      return feats;
+    }
+
+    // Fit to the selected states' polygons. States are already loaded (they
+    // were rendered at level 1), so this is immediate and never waits on the
+    // counties fetch. Falls back to the countries when no state is selected
+    // (or the states have not arrived yet).
+    function fitToSelectedStates() {
+      var ss = state.selectedStates || [];
+      if (!ss.length) {
+        fitToSelectedCountries();
+        return;
+      }
+      var feats = [];
+      Object.keys(statesCache).forEach(function (cid) {
+        (statesCache[cid] || []).forEach(function (f) {
+          if (ss.indexOf(f.properties.id) >= 0) feats.push(f);
+        });
+      });
+      if (!feats.length) {
+        fitToSelectedCountries();
+        return;
+      }
+      var bbox = bboxOfFeatures(feats);
+      if (bbox) {
+        flyToBounds(bbox, 9);
+      }
+    }
+
+    function fitToLevelExtent() {
+      if (userInteracting) return;
+      var level = levelNumber(state.activeLevel);
+      if (level === 0) {
+        fitToSelectedCountries();
+        return;
+      }
+      if (level === 2) {
+        fitToSelectedStates();
+        return;
+      }
+      var feats = statesInScope();
+      if (!feats.length) return;
+      var bbox = bboxOfFeatures(feats);
+      if (bbox) {
+        flyToBounds(bbox, 9);
       }
     }
 
@@ -461,8 +553,8 @@
       map.setFeatureState({ source: hovered.source, id: hovered.id }, { hover: true });
     }
 
-    function showTooltip(point, name) {
-      tooltip.textContent = name;
+    function showTooltip(point, name, engtype) {
+      tooltip.textContent = engtype ? name + " · " + engtype : name;
       tooltip.style.display = "block";
       tooltip.style.left = point.x + "px";
       tooltip.style.top = point.y + "px";
@@ -535,7 +627,7 @@
         var feat = activeFeature(e);
         if (feat) {
           map.getCanvas().style.cursor = "pointer";
-          showTooltip(e.point, feat.properties.name);
+          showTooltip(e.point, feat.properties.name, feat.properties.engtype);
           setHover(feat.properties.admin_level, feat.properties.id);
         } else {
           map.getCanvas().style.cursor = "";
@@ -554,11 +646,20 @@
       map.on("dragend", function () { userInteracting = false; });
     }
 
-    // Only wait for the map library + the small countries file. The heavy
-    // states/counties payloads load on demand as countries are selected.
+    // Only wait for the map library + the small countries FeatureCollection.
+    // The heavy states/counties payloads load on demand as countries are
+    // selected. Countries now come from the PostGIS-backed data object too.
+    var countriesURL = geoURL("countries");
+    if (!countriesURL) {
+      console.error("maplibre-admin: missing geoBaseUrl prop");
+      return {
+        update: function () {},
+        destroy: function () {}
+      };
+    }
     Promise.all([
       waitFor(function () { return window.maplibregl; }, 50, 30000),
-      fetchJSON("/geo/countries.geojson")
+      fetchJSON(countriesURL)
     ]).then(function (parts) {
       initMap(parts[0], parts[1]);
     }).catch(function (e) {
@@ -592,11 +693,21 @@
           levelChanged = true;
         }
         if ("darkMode" in values) state.darkMode = !!values.darkMode;
+        if ("geoBaseUrl" in values) state.geoBaseUrl = values.geoBaseUrl || "";
 
         // ── lazy loading / pre-fetching ─────────────────────────
         // A new country selection pre-fetches its states (next level down);
         // a new state selection pre-fetches its country's counties. Switching
-        // focus also triggers a safety-net load of the newly active level.
+        // focus also triggers a safety-net load of the newly active level and
+        // fits the viewport to the polygons now in scope.
+        function fitWhenReady(levelName) {
+          return ensureLevel(levelName, state.selectedCountries).then(function () {
+            if (!destroyed && map && map.loaded() && !userInteracting) {
+              fitToLevelExtent();
+            }
+          });
+        }
+
         if (countryChanged && state.selectedCountries.length) {
           ensureLevel("states", state.selectedCountries);
         }
@@ -604,8 +715,15 @@
           ensureLevel("counties", state.selectedCountries);
         }
         if (levelChanged) {
-          if (state.activeLevel === "state") ensureLevel("states", state.selectedCountries);
-          if (state.activeLevel === "county") ensureLevel("counties", state.selectedCountries);
+          if (state.activeLevel === "state") {
+            fitWhenReady("states");
+          } else if (state.activeLevel === "county") {
+            // Load counties for display, but fit the viewport to the selected
+            // states (already loaded) so the zoom is immediate.
+            ensureLevel("counties", state.selectedCountries);
+          }
+        } else if (stateChanged && state.activeLevel === "county") {
+          ensureLevel("counties", state.selectedCountries);
         }
 
         if (!map || !map.loaded()) return; // map applies latest state on load
@@ -614,7 +732,11 @@
         applyVisibility();
         if ("darkMode" in values) applyBasemap();
 
-        if (countryChanged && !userInteracting) {
+        if ((levelChanged && state.activeLevel === "county") ||
+            (stateChanged && state.activeLevel === "county")) {
+          if (!userInteracting) fitToLevelExtent();
+        }
+        if ((countryChanged || (levelChanged && state.activeLevel === "country")) && !userInteracting) {
           fitToSelectedCountries();
         }
       },
