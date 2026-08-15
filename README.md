@@ -68,8 +68,11 @@ Run `Rscript data-raw/generate_geo.R` to load or refresh the data
 cp .env.example .env
 
 # 2. Build and start the database + load GADM data
-cp .env.example .env
 docker compose up -d db
+
+#    Load .env into the shell so host-side tools (generate_geo.R) see
+#    config such as POSTGRES_HOST_PORT and the POSTGRES_* credentials.
+set -a; . ./.env; set +a
 Rscript data-raw/generate_geo.R
 
 # 3. Build and start the rest of the stack
