@@ -105,7 +105,9 @@ RUN groupadd --gid $GID nut \
     && chown nut:nut /app/irid
 
 # Application code
-COPY --chown=nut:nut irid/app.r irid/assets irid/r irid/config.yml /app/irid/
+COPY --chown=nut:nut irid/app.r irid/config.yml /app/irid/
+COPY --chown=nut:nut irid/assets /app/irid/assets/
+COPY --chown=nut:nut irid/r /app/irid/r/
 
 # Compiled CSS from stage 1
 COPY --chown=nut:nut --from=css \
